@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FingerCanvas — Webcam Finger Painting Studio</title>
+
+  <!-- Tailwind CSS via Play CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- canvas-confetti for download celebration -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+
+  <script>
+    // Tailwind custom theme
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            neon: {
+              purple: '#a855f7',
+              cyan:   '#22d3ee',
+              pink:   '#ec4899',
+            },
+          },
+          animation: {
+            'breathe': 'breathe 3s ease-in-out infinite',
+            'fade-in': 'fadeIn 0.4s ease-out',
+            'slide-up': 'slideUp 0.4s ease-out',
+            'pop': 'pop 0.3s ease-out',
+          },
+          keyframes: {
+            breathe: {
+              '0%, 100%': { boxShadow: '0 0 20px 2px #a855f766, 0 0 40px 4px #22d3ee33' },
+              '50%':       { boxShadow: '0 0 40px 8px #a855f7aa, 0 0 80px 12px #22d3ee66' },
+            },
+            fadeIn:  { from: { opacity: '0' },                           to: { opacity: '1' } },
+            slideUp: { from: { opacity: '0', transform: 'translateY(20px)' }, to: { opacity: '1', transform: 'translateY(0)' } },
+            pop:     { '0%': { transform: 'scale(0.8)', opacity: '0' }, '60%': { transform: 'scale(1.05)' }, '100%': { transform: 'scale(1)', opacity: '1' } },
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    /* ─── Global resets & fonts ──────────────────────────────── */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0a0f; color: #e2e8f0; min-height: 100dvh; overflow-x: hidden; }
+
+    /* ─── Neon glow helpers ───────────────────────────────────── */
+    .glow-purple { box-shadow: 0 0 12px 2px #a855f755; }
+    .glow-cyan   { box-shadow: 0 0 12px 2px #22d3ee55; }
+    .glow-pink   { box-shadow: 0 0 12px 2px #ec489955; }
+    .text-glow-purple { text-shadow: 0 0 8px #a855f7aa; }
+    .text-glow-cyan   { text-shadow: 0 0 8px #22d3eeaa; }
+
+    /* ─── Video frame / canvas wrapper ───────────────────────── */
+    #studio-frame {
+      position: relative;
+      border-radius: 1rem;
+      overflow: hidden;
+      border: 2px solid #a855f744;
+      animation: breathe 3s ease-in-out infinite;
+    }
+
+    #webcam, #drawing-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #drawing-canvas {
+      position: absolute;
+      top: 0; left: 0;
+      cursor: crosshair;
+      touch-action: none; /* prevent scroll while painting */
+    }
+
+    /* ─── Mirrored state ─────────────────────────────────────── */
+    .mirrored #webcam,
+    .mirrored #drawing-canvas { transform: scaleX(-1); }
+
+    /* ─── Toolbar ────────────────────────────────────────────── */
+    #toolbar {
+      background: rgba(15, 15, 25, 0.92);
+      backdrop-filter: blur(12px);
+      border: 1px solid #ffffff18;
+      border-radius: 1rem;
+    }
+
+    /* ─── Color swatch buttons ───────────────────────────────── */
+    .color-swatch {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      cursor: pointer;
+      border: 2px solid transparent;
+      transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+      flex-shrink: 0;
+    }
+    .color-swatch:hover  { transform: scale(1.2); }
+    .color-swatch.active { border-color: #fff; box-shadow: 0 0 8px 2px currentColor; }
+
+    /* ─── Range slider custom styling ────────────────────────── */
+    input[type=range] { -webkit-appearance: none; appearance: none; background: transparent; }
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 4px; border-radius: 2px;
+      background: linear-gradient(90deg, #a855f7, #22d3ee);
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 16px; height: 16px; margin-top: -6px;
+      border-radius: 50%; background: #fff;
+      box-shadow: 0 0 6px #a855f7aa; cursor: pointer;
+    }
+    input[type=range]::-moz-range-track {
+      height: 4px; border-radius: 2px;
+      background: linear-gradient(90deg, #a855f7, #22d3ee);
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 16px; height: 16px; border: none;
+      border-radius: 50%; background: #fff;
+      box-shadow: 0 0 6px #a855f7aa; cursor: pointer;
+    }
+
+    /* ─── Custom color picker swatch ─────────────────────────── */
+    #custom-color-picker {
+      width: 28px; height: 28px;
+      border-radius: 50%; cursor: pointer;
+      border: 2px solid #ffffff55;
+      padding: 0; overflow: hidden;
+      flex-shrink: 0;
+    }
+    #custom-color-picker::-webkit-color-swatch-wrapper { padding: 0; }
+    #custom-color-picker::-webkit-color-swatch { border: none; border-radius: 50%; }
+
+    /* ─── Brush preview circle ───────────────────────────────── */
+    #brush-preview {
+      border-radius: 50%;
+      background: currentColor;
+      flex-shrink: 0;
+      min-width: 6px; min-height: 6px;
+      max-width: 60px; max-height: 60px;
+      transition: width 0.1s, height 0.1s, background 0.2s;
+    }
+
+    /* ─── Tool buttons ───────────────────────────────────────── */
+    .tool-btn {
+      transition: transform 0.15s, box-shadow 0.15s, background 0.2s;
+      border-radius: 0.5rem;
+      border: 1px solid transparent;
+    }
+    .tool-btn:hover { transform: translateY(-1px); }
+    .tool-btn.active {
+      border-color: #a855f7;
+      box-shadow: 0 0 10px 2px #a855f755;
+      background: #a855f722 !important;
+    }
+
+    /* ─── Toast ──────────────────────────────────────────────── */
+    #toast {
+      position: fixed; top: 1.5rem; left: 50%; transform: translateX(-50%);
+      z-index: 9999; pointer-events: none;
+      animation: slideUp 0.4s ease-out;
+    }
+
+    /* ─── Modal backdrop ─────────────────────────────────────── */
+    #modal-backdrop {
+      position: fixed; inset: 0; z-index: 8888;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(6px);
+      display: flex; align-items: center; justify-content: center;
+      animation: fadeIn 0.3s ease-out;
+    }
+
+    /* ─── Clear flash animation ──────────────────────────────── */
+    @keyframes clearFlash {
+      0%   { opacity: 0; }
+      30%  { opacity: 0.35; }
+      100% { opacity: 0; }
+    }
+    #clear-flash {
+      position: absolute; inset: 0;
+      background: radial-gradient(circle, #a855f7aa, transparent 70%);
+      pointer-events: none;
+      border-radius: inherit;
+      opacity: 0;
+    }
+    #clear-flash.flash { animation: clearFlash 0.5s ease-out forwards; }
+
+    /* ─── Placeholder (before webcam opens) ──────────────────── */
+    #placeholder {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: linear-gradient(135deg, #1a0a2e 0%, #0a1628 50%, #0d1a0d 100%);
+    }
+  </style>
+</head>
+<body class="flex flex-col min-h-dvh">
+
+  <!-- ═══════════════════════════ HEADER ═══════════════════════════ -->
+  <header class="flex items-center justify-between px-4 py-3 border-b border-white/10">
+    <div class="flex items-center gap-2">
+      <!-- Fingerprint icon (inline SVG) -->
+      <svg class="w-8 h-8 text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M12 2C7.6 2 4 5.6 4 10c0 5.5 4 10.5 8 12 4-1.5 8-6.5 8-12 0-4.4-3.6-8-8-8z"/>
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M9 10c0-1.7 1.3-3 3-3s3 1.3 3 3c0 2.5-1.3 4.8-3 6.5C10.3 14.8 9 12.5 9 10z"/>
+      </svg>
+      <h1 class="text-xl font-bold text-glow-purple" style="background: linear-gradient(90deg,#a855f7,#22d3ee,#ec4899); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+        FingerCanvas
+      </h1>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <!-- Keyboard shortcut hint -->
+      <span class="hidden sm:flex items-center gap-1 text-xs text-white/40 mr-2">
+        <kbd class="px-1 py-0.5 rounded bg-white/10 font-mono">C</kbd> Clear
+        <kbd class="px-1 py-0.5 rounded bg-white/10 font-mono ml-2">E</kbd> Eraser
+        <kbd class="px-1 py-0.5 rounded bg-white/10 font-mono ml-2">D</kbd> Download
+      </span>
+      <!-- How to Use button -->
+      <button id="help-btn" class="tool-btn flex items-center gap-1.5 px-3 py-1.5 text-sm text-cyan-400 bg-white/5 hover:bg-white/10 border border-cyan-500/30">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path stroke-linecap="round" d="M12 16v-4M12 8h.01"/></svg>
+        How to Use
+      </button>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════ MAIN ════════════════════════════ -->
+  <main class="flex-1 flex flex-col items-center justify-start px-3 py-4 gap-4 max-w-5xl mx-auto w-full">
+
+    <!-- ── TOOLBAR ─────────────────────────────────────────────── -->
+    <div id="toolbar" class="w-full flex flex-wrap items-center gap-3 p-3 select-none">
+
+      <!-- Open / Close Webcam -->
+      <button id="webcam-btn"
+        class="tool-btn flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg
+               bg-gradient-to-r from-purple-600 to-cyan-500 text-white shadow-lg
+               hover:from-purple-500 hover:to-cyan-400 transition-all glow-purple">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.55-2.275A1 1 0 0121 8.618v6.764a1 1 0 01-1.45.894L15 14M4 8h11v8H4a1 1 0 01-1-1V9a1 1 0 011-1z"/>
+        </svg>
+        Open Webcam
+      </button>
+
+      <!-- Mirror toggle -->
+      <button id="mirror-btn" class="tool-btn flex items-center gap-1.5 px-3 py-2 text-sm text-white/70 bg-white/5 hover:bg-white/10 border border-white/10" title="Toggle Mirror (natural selfie view)">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 7l-4 5 4 5M16 7l4 5-4 5M12 3v18"/>
+        </svg>
+        Mirror
+      </button>
+
+      <!-- Divider -->
+      <div class="w-px h-8 bg-white/10 hidden sm:block"></div>
+
+      <!-- Color palette -->
+      <div class="flex items-center gap-1.5 flex-wrap" id="color-palette" role="group" aria-label="Color palette">
+        <!-- Swatches injected by JS -->
+      </div>
+
+      <!-- Custom color picker -->
+      <input type="color" id="custom-color-picker" value="#a855f7" title="Custom colour" aria-label="Pick a custom colour" />
+
+      <!-- Divider -->
+      <div class="w-px h-8 bg-white/10 hidden sm:block"></div>
+
+      <!-- Brush size -->
+      <div class="flex items-center gap-2 flex-1 min-w-[180px]">
+        <svg class="w-4 h-4 text-white/50 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="4"/>
+        </svg>
+        <input type="range" id="brush-size" min="2" max="80" value="16" class="flex-1" aria-label="Brush size" />
+        <!-- Live preview circle -->
+        <div id="brush-preview" style="width:16px; height:16px; color:#a855f7;"></div>
+      </div>
+
+      <!-- Divider -->
+      <div class="w-px h-8 bg-white/10 hidden sm:block"></div>
+
+      <!-- Eraser -->
+      <button id="eraser-btn" class="tool-btn flex items-center gap-1.5 px-3 py-2 text-sm text-white/70 bg-white/5 hover:bg-white/10 border border-white/10" title="Eraser (E)">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M20 20H7L3 16l11-11 6 6-4 4"/>
+        </svg>
+        Eraser
+      </button>
+
+      <!-- Undo -->
+      <button id="undo-btn" class="tool-btn flex items-center gap-1.5 px-3 py-2 text-sm text-white/70 bg-white/5 hover:bg-white/10 border border-white/10" title="Undo last stroke">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a7 7 0 017 7v1M3 10l4-4M3 10l4 4"/>
+        </svg>
+        Undo
+      </button>
+
+      <!-- Clear -->
+      <button id="clear-btn" class="tool-btn flex items-center gap-1.5 px-3 py-2 text-sm text-white/70 bg-white/5 hover:bg-white/10 border border-white/10" title="Clear canvas (C)">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+        </svg>
+        Clear
+      </button>
+
+      <!-- Download -->
+      <button id="download-btn"
+        class="tool-btn flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg
+               bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow-lg
+               hover:from-pink-500 hover:to-purple-500 transition-all glow-pink"
+        title="Download art (D)">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 3v12"/>
+        </svg>
+        Download Art
+      </button>
+
+    </div><!-- /toolbar -->
+
+    <!-- ── STUDIO FRAME ───────────────────────────────────────── -->
+    <div id="studio-frame" class="w-full" style="max-width:860px; aspect-ratio:16/9;">
+
+      <!-- Placeholder shown before camera opens -->
+      <div id="placeholder">
+        <div class="flex flex-col items-center gap-4 p-6 text-center">
+          <div class="w-20 h-20 rounded-full flex items-center justify-center" style="background: rgba(168,85,247,0.15); border: 2px solid rgba(168,85,247,0.3);">
+            <svg class="w-10 h-10 text-purple-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.55-2.275A1 1 0 0121 8.618v6.764a1 1 0 01-1.45.894L15 14M4 8h11v8H4a1 1 0 01-1-1V9a1 1 0 011-1z"/>
+            </svg>
+          </div>
+          <div>
+            <p class="text-2xl font-bold text-white/80 mb-1">Your Canvas Awaits</p>
+            <p class="text-sm text-white/40">Click <strong class="text-purple-400">Open Webcam</strong> to start painting on your live video</p>
+          </div>
+          <button id="big-open-btn"
+            class="mt-2 px-8 py-3 rounded-xl font-bold text-white text-lg shadow-xl transition-all hover:scale-105"
+            style="background: linear-gradient(135deg,#a855f7,#22d3ee);">
+            🎨 Open Webcam
+          </button>
+        </div>
+      </div>
+
+      <!-- Webcam video -->
+      <video id="webcam" autoplay playsinline muted aria-label="Webcam feed" style="display:none;"></video>
+
+      <!-- Drawing canvas (overlaid on video) -->
+      <canvas id="drawing-canvas" aria-label="Drawing canvas" style="display:none;"></canvas>
+
+      <!-- Flash overlay for Clear animation -->
+      <div id="clear-flash"></div>
+    </div>
+
+    <!-- Error banner -->
+    <div id="error-banner" class="hidden w-full max-w-[860px] rounded-xl p-4 text-sm flex items-start gap-3"
+         style="background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4);">
+      <svg class="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="10"/><path stroke-linecap="round" d="M12 8v4M12 16h.01"/>
+      </svg>
+      <span id="error-msg" class="text-red-300"></span>
+    </div>
+
+  </main>
+
+  <!-- ═══════════════════════════ TOAST ════════════════════════════ -->
+  <div id="toast" style="display:none;">
+    <div class="flex items-center gap-3 px-5 py-3 rounded-2xl border shadow-2xl"
+         style="background:rgba(15,15,25,0.95); border-color:rgba(168,85,247,0.5);">
+      <span id="toast-emoji" class="text-xl">👋</span>
+      <span id="toast-text" class="text-sm text-white/90 font-medium"></span>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ HOW TO USE MODAL ═════════════════ -->
+  <div id="modal-backdrop" style="display:none;">
+    <div class="relative w-full max-w-lg mx-4 rounded-2xl overflow-hidden shadow-2xl animate-pop"
+         style="background:rgba(15,15,30,0.98); border:1px solid rgba(168,85,247,0.4);">
+      <!-- Modal header -->
+      <div class="flex items-center justify-between px-6 py-4 border-b" style="border-color:rgba(255,255,255,0.08);">
+        <h2 class="text-lg font-bold" style="background:linear-gradient(90deg,#a855f7,#22d3ee); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+          How to Use FingerCanvas
+        </h2>
+        <button id="modal-close" class="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors" aria-label="Close modal">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <!-- Modal body -->
+      <div class="px-6 py-5 space-y-4 text-sm text-white/75 max-h-[70vh] overflow-y-auto">
+        <ol class="space-y-4 list-none">
+          <li class="flex gap-3">
+            <span class="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background:#a855f7;">1</span>
+            <div><strong class="text-white">Open Your Camera</strong><br>Click the <em class="text-purple-400">Open Webcam</em> button. Allow camera access when your browser asks.</div>
+          </li>
+          <li class="flex gap-3">
+            <span class="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background:#22d3ee;">2</span>
+            <div><strong class="text-white">Pick Your Colour</strong><br>Choose a preset colour swatch or click the colour wheel to pick any custom colour.</div>
+          </li>
+          <li class="flex gap-3">
+            <span class="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background:#ec4899;">3</span>
+            <div><strong class="text-white">Set Your Brush Size</strong><br>Drag the slider to choose a brush from 2 px (fine line) to 80 px (thick stroke). The live circle shows the exact size.</div>
+          </li>
+          <li class="flex gap-3">
+            <span class="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background:#a855f7;">4</span>
+            <div><strong class="text-white">Paint!</strong><br>Click and drag with your mouse — or use your finger on a touchscreen — directly on the live video to draw.</div>
+          </li>
+          <li class="flex gap-3">
+            <span class="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background:#22d3ee;">5</span>
+            <div><strong class="text-white">Eraser / Undo / Clear</strong><br>
+              <em class="text-cyan-400">Eraser</em> — switch to eraser mode.<br>
+              <em class="text-cyan-400">Undo</em> — remove your last stroke.<br>
+              <em class="text-cyan-400">Clear</em> — wipe the whole canvas (animated!).</div>
+          </li>
+          <li class="flex gap-3">
+            <span class="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background:#ec4899;">6</span>
+            <div><strong class="text-white">Download Your Art</strong><br>Click <em class="text-pink-400">Download Art</em> to save a PNG snapshot of your video + drawing. Enjoy the confetti! 🎉</div>
+          </li>
+          <li class="flex gap-3">
+            <span class="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background:#a855f7;">7</span>
+            <div><strong class="text-white">Keyboard Shortcuts</strong><br>
+              <kbd class="px-1 py-0.5 rounded bg-white/10 font-mono text-xs">C</kbd> Clear canvas &nbsp;
+              <kbd class="px-1 py-0.5 rounded bg-white/10 font-mono text-xs">E</kbd> Toggle eraser &nbsp;
+              <kbd class="px-1 py-0.5 rounded bg-white/10 font-mono text-xs">D</kbd> Download art
+            </div>
+          </li>
+        </ol>
+        <p class="text-white/40 text-xs pt-2">Tip: Enable <strong class="text-white/60">Mirror</strong> for a natural selfie-style view.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ JAVASCRIPT ════════════════════════ -->
+  <script>
+  (() => {
+    'use strict';
+
+    // ──────────────────────────── DOM refs ───────────────────────────
+    const webcamEl       = document.getElementById('webcam');
+    const canvas         = document.getElementById('drawing-canvas');
+    const ctx            = canvas.getContext('2d');
+    const studioFrame    = document.getElementById('studio-frame');
+    const placeholder    = document.getElementById('placeholder');
+    const clearFlash     = document.getElementById('clear-flash');
+    const errorBanner    = document.getElementById('error-banner');
+    const errorMsg       = document.getElementById('error-msg');
+    const toastEl        = document.getElementById('toast');
+    const toastText      = document.getElementById('toast-text');
+    const toastEmoji     = document.getElementById('toast-emoji');
+    const modalBackdrop  = document.getElementById('modal-backdrop');
+    const colorPalette   = document.getElementById('color-palette');
+    const brushSizeInput = document.getElementById('brush-size');
+    const brushPreview   = document.getElementById('brush-preview');
+    const customColorPicker = document.getElementById('custom-color-picker');
+
+    const webcamBtn    = document.getElementById('webcam-btn');
+    const bigOpenBtn   = document.getElementById('big-open-btn');
+    const mirrorBtn    = document.getElementById('mirror-btn');
+    const eraserBtn    = document.getElementById('eraser-btn');
+    const undoBtn      = document.getElementById('undo-btn');
+    const clearBtn     = document.getElementById('clear-btn');
+    const downloadBtn  = document.getElementById('download-btn');
+    const helpBtn      = document.getElementById('help-btn');
+    const modalClose   = document.getElementById('modal-close');
+
+    // ──────────────────────────── State ──────────────────────────────
+    let stream          = null;     // MediaStream
+    let isDrawing       = false;
+    let isMirrored      = false;
+    let isEraserMode    = false;
+    let currentColor    = '#a855f7';
+    let brushSize       = 16;
+    let lastX           = 0;
+    let lastY           = 0;
+
+    // Undo history: each entry is a full ImageData snapshot before a stroke begins
+    const undoStack     = [];
+    const MAX_UNDO      = 40;
+
+    // ──────────────────────────── Colour palette ─────────────────────
+    const PALETTE_COLORS = [
+      '#ffffff', // white
+      '#f87171', // red
+      '#fb923c', // orange
+      '#fbbf24', // yellow
+      '#4ade80', // green
+      '#22d3ee', // cyan
+      '#60a5fa', // blue
+      '#a855f7', // purple
+      '#ec4899', // pink
+      '#000000', // black
+    ];
+
+    /** Build swatch buttons */
+    function buildPalette() {
+      colorPalette.innerHTML = '';
+      PALETTE_COLORS.forEach(color => {
+        const btn = document.createElement('button');
+        btn.className = 'color-swatch';
+        btn.style.background = color;
+        btn.title = color;
+        btn.setAttribute('aria-label', `Colour ${color}`);
+        if (color === currentColor) btn.classList.add('active');
+        btn.addEventListener('click', () => selectColor(color));
+        colorPalette.appendChild(btn);
+      });
+    }
+
+    /** Select a new drawing colour */
+    function selectColor(color) {
+      currentColor = color;
+      customColorPicker.value = color;
+      updateBrushPreview();
+      // Update active swatch
+      colorPalette.querySelectorAll('.color-swatch').forEach(b => {
+        b.classList.toggle('active', b.style.background === color || b.style.backgroundColor === color);
+      });
+      // Deactivate eraser if we pick a colour
+      if (isEraserMode) toggleEraser(false);
+    }
+
+    // ──────────────────────────── Brush preview ───────────────────────
+    function updateBrushPreview() {
+      const size = Math.max(6, Math.min(brushSize, 60));
+      brushPreview.style.width  = size + 'px';
+      brushPreview.style.height = size + 'px';
+      brushPreview.style.background = isEraserMode ? '#ffffff44' : currentColor;
+      brushPreview.style.border = isEraserMode ? '2px dashed #fff' : 'none';
+    }
+
+    // ──────────────────────────── Canvas resize ───────────────────────
+    /**
+     * Keep canvas pixel dimensions in sync with the displayed video element.
+     * Called once on video 'loadedmetadata' and on window resize.
+     */
+    function syncCanvasSize() {
+      const rect = studioFrame.getBoundingClientRect();
+      if (rect.width === 0) return;
+      // Preserve current drawing while resizing
+      const tempCanvas  = document.createElement('canvas');
+      tempCanvas.width  = canvas.width;
+      tempCanvas.height = canvas.height;
+      const tempCtx     = tempCanvas.getContext('2d');
+      tempCtx.drawImage(canvas, 0, 0);
+
+      canvas.width  = Math.round(rect.width);
+      canvas.height = Math.round(rect.height);
+
+      // Restore drawing
+      ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
+      applyCtxDefaults();
+    }
+
+    /** Apply persistent context settings after any reset */
+    function applyCtxDefaults() {
+      ctx.lineCap    = 'round';
+      ctx.lineJoin   = 'round';
+    }
+
+    // ──────────────────────────── Webcam ─────────────────────────────
+    async function openWebcam() {
+      hideError();
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+        webcamEl.srcObject = stream;
+        webcamEl.onloadedmetadata = () => {
+          syncCanvasSize();
+          showCameraUI();
+        };
+        // Update webcam button to "Close"
+        webcamBtn.innerHTML = `
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+          </svg>
+          Close Webcam`;
+        webcamBtn.classList.remove('from-purple-600', 'to-cyan-500', 'hover:from-purple-500', 'hover:to-cyan-400');
+        webcamBtn.classList.add('from-red-700', 'to-red-500', 'hover:from-red-600', 'hover:to-red-400');
+        webcamBtn.onclick = closeWebcam;
+      } catch (err) {
+        showError(cameraErrorMessage(err));
+      }
+    }
+
+    function closeWebcam() {
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+      webcamEl.srcObject = null;
+      hideCameraUI();
+      webcamBtn.innerHTML = `
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.55-2.275A1 1 0 0121 8.618v6.764a1 1 0 01-1.45.894L15 14M4 8h11v8H4a1 1 0 01-1-1V9a1 1 0 011-1z"/>
+        </svg>
+        Open Webcam`;
+      webcamBtn.classList.remove('from-red-700', 'to-red-500', 'hover:from-red-600', 'hover:to-red-400');
+      webcamBtn.classList.add('from-purple-600', 'to-cyan-500', 'hover:from-purple-500', 'hover:to-cyan-400');
+      webcamBtn.onclick = openWebcam;
+    }
+
+    function showCameraUI() {
+      placeholder.style.display  = 'none';
+      webcamEl.style.display      = 'block';
+      canvas.style.display        = 'block';
+    }
+
+    function hideCameraUI() {
+      placeholder.style.display  = 'flex';
+      webcamEl.style.display      = 'none';
+      canvas.style.display        = 'none';
+      // Clear drawing
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      undoStack.length = 0;
+    }
+
+    /** Translate DOMException to friendly text */
+    function cameraErrorMessage(err) {
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')
+        return '📵 Camera access was denied. Please allow camera permission in your browser settings and try again.';
+      if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError')
+        return '📷 No camera was found on your device. Please connect a camera and try again.';
+      if (err.name === 'NotReadableError')
+        return '⚠️ Your camera is being used by another application. Please close it and try again.';
+      return `⚠️ Could not access camera: ${err.message}`;
+    }
+
+    function showError(msg) { errorMsg.textContent = msg; errorBanner.classList.remove('hidden'); }
+    function hideError()     { errorBanner.classList.add('hidden'); }
+
+    // ──────────────────────────── Drawing helpers ─────────────────────
+    /**
+     * Convert a mouse or touch event's clientX/clientY into canvas coordinates,
+     * accounting for CSS scaling and mirror transform.
+     */
+    function getCanvasPoint(clientX, clientY) {
+      const rect   = canvas.getBoundingClientRect();
+      const scaleX = canvas.width  / rect.width;
+      const scaleY = canvas.height / rect.height;
+      let x = (clientX - rect.left) * scaleX;
+      const y = (clientY - rect.top)  * scaleY;
+      // When mirrored the canvas itself is CSS-flipped; adjust X
+      if (isMirrored) x = canvas.width - x;
+      return { x, y };
+    }
+
+    /** Save current canvas state to undo stack */
+    function pushUndo() {
+      if (undoStack.length >= MAX_UNDO) undoStack.shift();
+      undoStack.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    }
+
+    function startDraw(x, y) {
+      isDrawing = true;
+      pushUndo();
+      [lastX, lastY] = [x, y];
+      // Draw a dot on click/tap (in case there is no movement)
+      ctx.beginPath();
+      ctx.arc(x, y, (isEraserMode ? brushSize : brushSize) / 2, 0, Math.PI * 2);
+      ctx.fillStyle = isEraserMode ? 'rgba(0,0,0,0)' : currentColor;
+      if (isEraserMode) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fill();
+        ctx.restore();
+      } else {
+        ctx.shadowBlur  = 8;
+        ctx.shadowColor = currentColor;
+        ctx.fill();
+        ctx.shadowBlur  = 0;
+      }
+    }
+
+    function draw(x, y) {
+      if (!isDrawing) return;
+      ctx.beginPath();
+      ctx.moveTo(lastX, lastY);
+      ctx.lineTo(x, y);
+      ctx.lineWidth  = brushSize;
+
+      if (isEraserMode) {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.strokeStyle = 'rgba(0,0,0,1)';
+        ctx.shadowBlur  = 0;
+      } else {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.strokeStyle = currentColor;
+        ctx.shadowBlur  = 10;
+        ctx.shadowColor = currentColor;
+      }
+
+      ctx.lineCap  = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.globalCompositeOperation = 'source-over';
+
+      [lastX, lastY] = [x, y];
+    }
+
+    function endDraw() { isDrawing = false; }
+
+    // ──────────────────────────── Mouse events ───────────────────────
+    canvas.addEventListener('mousedown', e => {
+      if (!stream) return;
+      const { x, y } = getCanvasPoint(e.clientX, e.clientY);
+      startDraw(x, y);
+    });
+    canvas.addEventListener('mousemove', e => {
+      if (!stream) return;
+      const { x, y } = getCanvasPoint(e.clientX, e.clientY);
+      draw(x, y);
+    });
+    canvas.addEventListener('mouseup',   endDraw);
+    canvas.addEventListener('mouseleave', endDraw);
+
+    // ──────────────────────────── Touch events ───────────────────────
+    canvas.addEventListener('touchstart', e => {
+      if (!stream) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      const { x, y } = getCanvasPoint(touch.clientX, touch.clientY);
+      startDraw(x, y);
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', e => {
+      if (!stream) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      const { x, y } = getCanvasPoint(touch.clientX, touch.clientY);
+      draw(x, y);
+    }, { passive: false });
+
+    canvas.addEventListener('touchend',   endDraw);
+    canvas.addEventListener('touchcancel', endDraw);
+
+    // ──────────────────────────── Mirror ─────────────────────────────
+    function toggleMirror() {
+      isMirrored = !isMirrored;
+      studioFrame.classList.toggle('mirrored', isMirrored);
+      mirrorBtn.classList.toggle('active', isMirrored);
+    }
+
+    // ──────────────────────────── Eraser ─────────────────────────────
+    function toggleEraser(force) {
+      isEraserMode = (force !== undefined) ? force : !isEraserMode;
+      eraserBtn.classList.toggle('active', isEraserMode);
+      canvas.style.cursor = isEraserMode ? 'cell' : 'crosshair';
+      updateBrushPreview();
+    }
+
+    // ──────────────────────────── Undo ───────────────────────────────
+    function undoStroke() {
+      if (undoStack.length === 0) return;
+      const imageData = undoStack.pop();
+      ctx.putImageData(imageData, 0, 0);
+      showToast('↩️', 'Undo!');
+    }
+
+    // ──────────────────────────── Clear ──────────────────────────────
+    function clearCanvas() {
+      pushUndo();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // Satisfying flash animation
+      clearFlash.classList.remove('flash');
+      void clearFlash.offsetWidth; // reflow to restart animation
+      clearFlash.classList.add('flash');
+      showToast('🗑️', 'Canvas cleared!');
+    }
+
+    // ──────────────────────────── Download ───────────────────────────
+    function downloadArt() {
+      if (!stream) {
+        showToast('📷', 'Please open your webcam first!');
+        return;
+      }
+      // Create a composite canvas: video frame + drawing
+      const composite   = document.createElement('canvas');
+      composite.width   = canvas.width;
+      composite.height  = canvas.height;
+      const cctx        = composite.getContext('2d');
+
+      // If mirrored, flip the composite to match what user sees
+      if (isMirrored) {
+        cctx.save();
+        cctx.translate(composite.width, 0);
+        cctx.scale(-1, 1);
+      }
+      // Draw video frame
+      cctx.drawImage(webcamEl, 0, 0, composite.width, composite.height);
+      if (isMirrored) cctx.restore();
+
+      // Overlay drawing (already in the correct orientation)
+      cctx.drawImage(canvas, 0, 0);
+
+      // Filename with timestamp
+      const now = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      const ts  = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}-${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+      const filename = `finger-art-${ts}.png`;
+
+      composite.toBlob(blob => {
+        const url = URL.createObjectURL(blob);
+        const a   = document.createElement('a');
+        a.href     = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+        launchConfetti();
+        showToast('🎉', 'Masterpiece saved!');
+      }, 'image/png');
+    }
+
+    /** Launch a satisfying confetti burst */
+    function launchConfetti() {
+      if (typeof confetti !== 'function') return;
+      const colors = ['#a855f7', '#22d3ee', '#ec4899', '#fbbf24', '#4ade80'];
+      confetti({ particleCount: 120, spread: 90, origin: { y: 0.55 }, colors });
+      setTimeout(() => confetti({ particleCount: 60, spread: 70, origin: { x: 0.2, y: 0.6 }, colors }), 250);
+      setTimeout(() => confetti({ particleCount: 60, spread: 70, origin: { x: 0.8, y: 0.6 }, colors }), 400);
+    }
+
+    // ──────────────────────────── Toast ──────────────────────────────
+    let toastTimer = null;
+
+    function showToast(emoji, text, duration = 2500) {
+      toastEmoji.textContent = emoji;
+      toastText.textContent  = text;
+      toastEl.style.display  = 'block';
+      toastEl.style.animation = 'none';
+      void toastEl.offsetWidth;
+      toastEl.style.animation = 'slideUp 0.4s ease-out';
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toastEl.style.display = 'none'; }, duration);
+    }
+
+    // ──────────────────────────── Modal ──────────────────────────────
+    function openModal()  { modalBackdrop.style.display = 'flex'; }
+    function closeModal() { modalBackdrop.style.display = 'none'; }
+
+    // ──────────────────────────── Event wiring ───────────────────────
+    webcamBtn.onclick  = openWebcam;
+    bigOpenBtn.onclick = openWebcam;
+    mirrorBtn.onclick  = toggleMirror;
+    eraserBtn.onclick  = () => toggleEraser();
+    undoBtn.onclick    = undoStroke;
+    clearBtn.onclick   = clearCanvas;
+    downloadBtn.onclick = downloadArt;
+    helpBtn.onclick    = openModal;
+    modalClose.onclick = closeModal;
+
+    // Close modal on backdrop click
+    modalBackdrop.addEventListener('click', e => { if (e.target === modalBackdrop) closeModal(); });
+
+    // Colour controls
+    customColorPicker.addEventListener('input', e => selectColor(e.target.value));
+
+    // Brush size
+    brushSizeInput.addEventListener('input', e => {
+      brushSize = Number(e.target.value);
+      updateBrushPreview();
+    });
+
+    // ──────────────────────────── Keyboard shortcuts ─────────────────
+    document.addEventListener('keydown', e => {
+      // Ignore when typing in an input / textarea
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      switch (e.key.toLowerCase()) {
+        case 'c': clearCanvas();     break;
+        case 'e': toggleEraser();    break;
+        case 'd': downloadArt();     break;
+      }
+    });
+
+    // ──────────────────────────── Resize handling ─────────────────────
+    const resizeObserver = new ResizeObserver(() => syncCanvasSize());
+    resizeObserver.observe(studioFrame);
+
+    // ──────────────────────────── Initialise ─────────────────────────
+    buildPalette();
+    updateBrushPreview();
+    applyCtxDefaults();
+
+    // Welcome toast after a short delay
+    setTimeout(() => showToast('👋', 'Welcome to FingerCanvas! Click "Open Webcam" to start painting.', 4000), 600);
+
+  })();
+  </script>
+</body>
+</html>
